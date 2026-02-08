@@ -13,35 +13,42 @@ type TestResultBase struct {
 	Rule string `json:"rule,omitempty"`
 
 	// IsValidatingAdmissionPolicy indicates if the policy is a validating admission policy.
+	// Deprecated: This field is deprecated and will be auto-detected from the policy file.
 	// It's required in case the policy is a validating admission policy.
 	// +optional
 	IsValidatingAdmissionPolicy bool `json:"isValidatingAdmissionPolicy,omitempty"`
 
 	// IsMutatingAdmissionPolicy indicates if the policy is a mutating admission policy.
+	// Deprecated: This field is deprecated and will be auto-detected from the policy file.
 	// +optional
 	IsMutatingAdmissionPolicy bool `json:"isMutatingAdmissionPolicy,omitempty"`
 
 	// IsValidatingPolicy indicates if the policy is a validating policy.
+	// Deprecated: This field is deprecated and will be auto-detected from the policy file.
 	// It's required in case the policy is a validating policy.
 	// +optional
 	IsValidatingPolicy bool `json:"isValidatingPolicy,omitempty"`
 
 	// IsDeletingPolicy indicates if the policy is a deleting policy.
+	// Deprecated: This field is deprecated and will be auto-detected from the policy file.
 	// It's required in case the policy is a deleting policy.
 	// +optional
 	IsDeletingPolicy bool `json:"isDeletingPolicy,omitempty"`
 
 	// IsImageValidatingPolicy indicates if the policy is an image validating policy.
+	// Deprecated: This field is deprecated and will be auto-detected from the policy file.
 	// It's required in case the policy is an image validating policy.
 	// +optional
 	IsImageValidatingPolicy bool `json:"isImageValidatingPolicy,omitempty"`
 
 	// IsGeneratingPolicy indicates if the policy is a generating policy.
+	// Deprecated: This field is deprecated and will be auto-detected from the policy file.
 	// It's required in case the policy is a generating policy.
 	// +optional
 	IsGeneratingPolicy bool `json:"isGeneratingPolicy,omitempty"`
 
 	// IsMutatingPolicy indicates if the policy is a mutating policy.
+	// Deprecated: This field is deprecated and will be auto-detected from the policy file.
 	// It's required in case the policy is a mutating policy.
 	// +optional
 	IsMutatingPolicy bool `json:"isMutatingPolicy,omitempty"`

@@ -12,6 +12,7 @@ import (
 	"github.com/kyverno/kyverno/cmd/cli/kubectl-kyverno/deprecations"
 	"github.com/kyverno/kyverno/cmd/cli/kubectl-kyverno/output/color"
 	"github.com/kyverno/kyverno/cmd/cli/kubectl-kyverno/output/table"
+	"github.com/kyverno/kyverno/cmd/cli/kubectl-kyverno/policy"
 	"github.com/kyverno/kyverno/cmd/cli/kubectl-kyverno/report"
 	"github.com/kyverno/kyverno/cmd/cli/kubectl-kyverno/test/filter"
 	engineapi "github.com/kyverno/kyverno/pkg/engine/api"
@@ -245,12 +246,41 @@ func checkResult(
 	return true, result.Description, "Ok"
 }
 
-func lookupRuleResponses(test v1alpha1.TestResult, responses ...engineapi.RuleResponse) []engineapi.RuleResponse {
+func lookupRuleResponses(test v1alpha1.TestResult, policyResults *policy.LoaderResults, responses ...engineapi.RuleResponse) []engineapi.RuleResponse {
 	var matches []engineapi.RuleResponse
-	// Since there are no rules in case of validating admission policies, responses are returned without checking rule names.
-	if test.IsValidatingAdmissionPolicy || test.IsValidatingPolicy || test.IsImageValidatingPolicy || test.IsMutatingAdmissionPolicy || test.IsDeletingPolicy || test.IsGeneratingPolicy || test.IsMutatingPolicy {
+
+	// Auto-detect policy type from loaded policies (replaces deprecated boolean fields)
+	isVAP, isVP, isIVP, isMAP, isDP, isGP, isMP := determinePolicyType(test.Policy, policyResults)
+
+	// For backward compatibility, also check the deprecated boolean fields if they are set
+	// This allows existing tests to continue working while we transition
+	if test.IsValidatingAdmissionPolicy {
+		isVAP = true
+	}
+	if test.IsValidatingPolicy {
+		isVP = true
+	}
+	if test.IsImageValidatingPolicy {
+		isIVP = true
+	}
+	if test.IsMutatingAdmissionPolicy {
+		isMAP = true
+	}
+	if test.IsDeletingPolicy {
+		isDP = true
+	}
+	if test.IsGeneratingPolicy {
+		isGP = true
+	}
+	if test.IsMutatingPolicy {
+		isMP = true
+	}
+
+	// Since there are no rules in case of CEL-based policies, responses are returned without checking rule names.
+	if isVAP || isVP || isIVP || isMAP || isDP || isGP || isMP {
 		matches = responses
 	} else {
+		// For regular Kyverno policies, match by rule name
 		for _, response := range responses {
 			rule := response.Name()
 			if rule != test.Rule && rule != "autogen-"+test.Rule && rule != "autogen-cronjob-"+test.Rule {

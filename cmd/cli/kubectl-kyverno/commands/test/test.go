@@ -56,6 +56,84 @@ type TestResponse struct {
 	Trigger         map[string][]engineapi.EngineResponse
 	Target          map[string][]engineapi.EngineResponse
 	SkippedPolicies map[string]string
+	PolicyResults   *policy.LoaderResults // Store policy results for auto-detection
+}
+
+// determinePolicyType checks which type of policy the given policy name belongs to
+// by examining the loaded policy results. This replaces the need for explicit boolean
+// fields in the test schema (isValidatingPolicy, isMutatingPolicy, etc.).
+func determinePolicyType(policyName string, results *policy.LoaderResults) (isVAP, isVP, isIVP, isMAP, isDP, isGP, isMP bool) {
+	// Check ValidatingAdmissionPolicy
+	for _, vap := range results.VAPs {
+		if vap.Name == policyName {
+			return true, false, false, false, false, false, false
+		}
+	}
+
+	// Check ValidatingPolicy (cluster-scoped and namespaced)
+	for _, vp := range results.ValidatingPolicies {
+		if vp.Name == policyName {
+			return false, true, false, false, false, false, false
+		}
+	}
+	for _, nvp := range results.NamespacedValidatingPolicies {
+		if nvp.Name == policyName {
+			return false, true, false, false, false, false, false
+		}
+	}
+
+	// Check ImageValidatingPolicy (cluster-scoped and namespaced)
+	for _, ivp := range results.ImageValidatingPolicies {
+		if ivp.Name == policyName {
+			return false, false, true, false, false, false, false
+		}
+	}
+	for _, nivp := range results.NamespacedImageValidatingPolicies {
+		if nivp.Name == policyName {
+			return false, false, true, false, false, false, false
+		}
+	}
+
+	// Check MutatingAdmissionPolicy
+	for _, map_ := range results.MAPs {
+		if map_.Name == policyName {
+			return false, false, false, true, false, false, false
+		}
+	}
+
+	// Check DeletingPolicy (cluster-scoped and namespaced)
+	for _, dp := range results.DeletingPolicies {
+		if dp.Name == policyName {
+			return false, false, false, false, true, false, false
+		}
+	}
+	for _, ndp := range results.NamespacedDeletingPolicies {
+		if ndp.Name == policyName {
+			return false, false, false, false, true, false, false
+		}
+	}
+
+	// Check GeneratingPolicy
+	for _, gp := range results.GeneratingPolicies {
+		if gp.Name == policyName {
+			return false, false, false, false, false, true, false
+		}
+	}
+
+	// Check MutatingPolicy (cluster-scoped and namespaced)
+	for _, mp := range results.MutatingPolicies {
+		if mp.Name == policyName {
+			return false, false, false, false, false, false, true
+		}
+	}
+	for _, nmp := range results.NamespacedMutatingPolicies {
+		if nmp.Name == policyName {
+			return false, false, false, false, false, false, true
+		}
+	}
+
+	// Not a CEL-based policy, must be a regular Kyverno policy
+	return false, false, false, false, false, false, false
 }
 
 func runTest(out io.Writer, testCase test.TestCase, registryAccess bool) (*TestResponse, error) {
@@ -306,6 +384,7 @@ func runTest(out io.Writer, testCase test.TestCase, registryAccess bool) (*TestR
 		Trigger:         map[string][]engineapi.EngineResponse{},
 		Target:          map[string][]engineapi.EngineResponse{},
 		SkippedPolicies: skippedPolicyNames,
+		PolicyResults:   results, // Store policy results for auto-detection
 	}
 	for _, resource := range uniques {
 		// the policy processor is for multiple policies at once

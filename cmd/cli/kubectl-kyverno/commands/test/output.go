@@ -243,11 +243,32 @@ func printTestResult(
 					if response.Policy().GetName() != polNameNs[len(polNameNs)-1] {
 						continue
 					}
-					for _, rule := range lookupRuleResponses(test, response.PolicyResponse.Rules...) {
+					for _, rule := range lookupRuleResponses(test, responses.PolicyResults, response.PolicyResponse.Rules...) {
 						r := response.Resource
 
-						if test.IsValidatingAdmissionPolicy || test.IsValidatingPolicy || test.IsImageValidatingPolicy || test.IsDeletingPolicy || test.IsMutatingPolicy {
-							if test.IsMutatingPolicy {
+						// Auto-detect policy type (with backward compatibility for deprecated fields)
+						isVAP, isVP, isIVP, _, isDP, isGP, isMP := determinePolicyType(test.Policy, responses.PolicyResults)
+						if test.IsValidatingAdmissionPolicy {
+							isVAP = true
+						}
+						if test.IsValidatingPolicy {
+							isVP = true
+						}
+						if test.IsImageValidatingPolicy {
+							isIVP = true
+						}
+						if test.IsDeletingPolicy {
+							isDP = true
+						}
+						if test.IsGeneratingPolicy {
+							isGP = true
+						}
+						if test.IsMutatingPolicy {
+							isMP = true
+						}
+
+						if isVAP || isVP || isIVP || isDP || isMP {
+							if isMP {
 								r = response.PatchedResource
 							}
 
@@ -262,7 +283,7 @@ func printTestResult(
 							continue
 						}
 
-						if test.IsGeneratingPolicy {
+						if isGP {
 							generatedResources := rule.GeneratedResources()
 							for _, r := range generatedResources {
 								ok, message, reason := checkResult(test, fs, resoucePath, response, rule, *r, removeColor)
