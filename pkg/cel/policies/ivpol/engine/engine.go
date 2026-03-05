@@ -238,7 +238,7 @@ func (e *engineImpl) handleMutation(
 	if err != nil {
 		return nil, nil, err
 	}
-	c := eval.NewCompiler(ictx, e.lister, request.RequestResource)
+	c := eval.NewCompiler(e.lister, request.RequestResource)
 	for _, ivpol := range filteredPolicies {
 		response := eval.ImageVerifyPolicyResponse{
 			Policy:     ivpol.Policy,
@@ -246,7 +246,7 @@ func (e *engineImpl) handleMutation(
 			Exceptions: ivpol.Exceptions,
 		}
 		startTime := time.Now()
-		if p, errList := c.Compile(ivpol.Policy, ivpol.Exceptions); errList != nil {
+		if p, errList := c.Compile(ictx, ivpol.Policy, ivpol.Exceptions); errList != nil {
 			response.Result = *engineapi.RuleError("evaluation", engineapi.ImageVerify, "failed to compile policy", errList.ToAggregate(), nil)
 		} else {
 			result, err := p.Evaluate(ctx, ictx, attr, request, namespace, true, context)

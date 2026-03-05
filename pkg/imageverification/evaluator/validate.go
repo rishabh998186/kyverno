@@ -93,8 +93,8 @@ func Validate(ivpol policiesv1beta1.ImageValidatingPolicyLike, lister k8scorev1.
 		return nil, nil
 	}
 
-	compiler := NewCompiler(ictx, lister, nil)
-	_, err := compiler.Compile(ivpol, nil)
+	compiler := NewCompiler(lister, nil)
+	_, err := compiler.Compile(ictx, ivpol, nil)
 	if err == nil {
 		return nil, nil
 	}

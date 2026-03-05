@@ -2,9 +2,9 @@ package eval
 
 import (
 	"context"
+	"sync"
 
 	"github.com/google/cel-go/cel"
-	policieskyvernoio "github.com/kyverno/api/api/policies.kyverno.io"
 	"github.com/kyverno/api/api/policies.kyverno.io/v1beta1"
 	policiesv1beta1 "github.com/kyverno/api/api/policies.kyverno.io/v1beta1"
 	"github.com/kyverno/kyverno/pkg/cel/compiler"
@@ -37,27 +37,32 @@ import (
 
 var ivpolCompilerVersion = version.MajorMinor(1, 0)
 
+// cachedStaticEnv holds the pre-built base CEL environment with static libraries.
+var (
+	cachedStaticEnv     *environment.EnvSet
+	cachedStaticEnvOnce sync.Once
+	cachedStaticEnvErr  error
+)
+
 type Compiler interface {
-	Compile(policiesv1beta1.ImageValidatingPolicyLike, []*policiesv1beta1.PolicyException) (CompiledPolicy, field.ErrorList)
+	Compile(imagedataloader.ImageContext, policiesv1beta1.ImageValidatingPolicyLike, []*policiesv1beta1.PolicyException) (CompiledPolicy, field.ErrorList)
 }
 
-func NewCompiler(ictx imagedataloader.ImageContext, lister k8scorev1.SecretInterface, reqGVR *metav1.GroupVersionResource) Compiler {
+func NewCompiler(lister k8scorev1.SecretInterface, reqGVR *metav1.GroupVersionResource) Compiler {
 	return &compilerImpl{
-		ictx:   ictx,
 		lister: lister,
 		reqGVR: reqGVR,
 	}
 }
 
 type compilerImpl struct {
-	ictx   imagedataloader.ImageContext
 	lister k8scorev1.SecretInterface
 	reqGVR *metav1.GroupVersionResource
 }
 
-func (c *compilerImpl) Compile(ivpolicy policiesv1beta1.ImageValidatingPolicyLike, exceptions []*policiesv1beta1.PolicyException) (CompiledPolicy, field.ErrorList) {
+func (c *compilerImpl) Compile(ictx imagedataloader.ImageContext, ivpolicy policiesv1beta1.ImageValidatingPolicyLike, exceptions []*policiesv1beta1.PolicyException) (CompiledPolicy, field.ErrorList) {
 	var allErrs field.ErrorList
-	ivpolEnvSet, variablesProvider, err := c.createBaseIvpolEnv(libs.GetLibsCtx(), ivpolicy)
+	ivpolEnvSet, variablesProvider, err := c.createIvpolEnv(libs.GetLibsCtx(), ictx, ivpolicy)
 	if err != nil {
 		return nil, append(allErrs, field.InternalError(nil, err))
 	}
@@ -163,97 +168,129 @@ func (c *compilerImpl) Compile(ivpolicy policiesv1beta1.ImageValidatingPolicyLik
 	}, nil
 }
 
-func (c *compilerImpl) createBaseIvpolEnv(libsctx libs.Context, ivpol policiesv1beta1.ImageValidatingPolicyLike) (*environment.EnvSet, *compiler.VariablesProvider, error) {
-	baseOpts := compiler.DefaultEnvOptions()
-	baseOpts = append(baseOpts,
-		cel.Variable(engine.ResourceKey, resource.ContextType),
-		cel.Variable(engine.ImagesKey, cel.MapType(cel.StringType, cel.ListType(cel.StringType))),
-		cel.Variable(engine.AttestorsKey, cel.MapType(cel.StringType, cel.DynType)),
-		cel.Variable(engine.AttestationsKey, cel.MapType(cel.StringType, cel.StringType)),
-		cel.Variable(engine.ObjectKey, cel.DynType),
-	)
+// getOrCreateStaticBaseEnv lazily builds and caches the static base CEL environment.
+func getOrCreateStaticBaseEnv(libsctx libs.Context) (*environment.EnvSet, error) {
+	cachedStaticEnvOnce.Do(func() {
+		base := environment.MustBaseEnvSet(ivpolCompilerVersion)
 
-	if ivpol.GetSpec().EvaluationMode() == policieskyvernoio.EvaluationModeKubernetes {
+		baseOpts := compiler.DefaultEnvOptions()
 		baseOpts = append(baseOpts,
+			cel.Variable(engine.ResourceKey, resource.ContextType),
+			cel.Variable(engine.ImagesKey, cel.MapType(cel.StringType, cel.ListType(cel.StringType))),
+			cel.Variable(engine.AttestorsKey, cel.MapType(cel.StringType, cel.DynType)),
+			cel.Variable(engine.AttestationsKey, cel.MapType(cel.StringType, cel.StringType)),
+			cel.Variable(engine.ObjectKey, cel.DynType),
+			// Include Kubernetes-mode variables unconditionally to make the static env universal.
 			cel.Variable(engine.RequestKey, engine.RequestType.CelType()),
 			cel.Variable(engine.NamespaceObjectKey, engine.NamespaceType.CelType()),
 			cel.Variable(engine.OldObjectKey, cel.DynType),
 			cel.Variable(engine.VariablesKey, engine.VariablesType),
 		)
-	}
 
-	base := environment.MustBaseEnvSet(ivpolCompilerVersion)
-	env, err := base.Env(environment.StoredExpressions)
+		env, err := base.Env(environment.StoredExpressions)
+		if err != nil {
+			cachedStaticEnvErr = err
+			return
+		}
+
+		variablesProvider := compiler.NewVariablesProvider(env.CELTypeProvider())
+		declProvider := apiservercel.NewDeclTypeProvider(compiler.NamespaceType, compiler.RequestType)
+		declOptions, err := declProvider.EnvOptions(variablesProvider)
+		if err != nil {
+			cachedStaticEnvErr = err
+			return
+		}
+
+		baseOpts = append(baseOpts, declOptions...)
+
+		extended, err := base.Extend(
+			environment.VersionedOptions{
+				IntroducedVersion: ivpolCompilerVersion,
+				EnvOptions:        baseOpts,
+			},
+			// static libraries
+			environment.VersionedOptions{
+				IntroducedVersion: ivpolCompilerVersion,
+				EnvOptions: []cel.EnvOption{
+					globalcontext.Lib(
+						globalcontext.Context{ContextInterface: libsctx},
+						globalcontext.Latest(),
+					),
+					http.Lib(
+						http.Context{ContextInterface: http.NewHTTP(nil)},
+						http.Latest(),
+					),
+					image.Lib(
+						image.Latest(),
+					),
+					imagedata.Lib(
+						imagedata.Context{ContextInterface: libsctx},
+						imagedata.Latest(),
+					),
+					resource.Lib(
+						resource.Context{ContextInterface: libsctx},
+						"",
+						resource.Latest(),
+					),
+					user.Lib(
+						user.Latest(),
+					),
+					math.Lib(
+						math.Latest(),
+					),
+					hash.Lib(
+						hash.Latest(),
+					),
+					json.Lib(
+						&json.JsonImpl{},
+						json.Latest(),
+					),
+					yaml.Lib(
+						&yaml.YamlImpl{},
+						yaml.Latest(),
+					),
+					random.Lib(
+						random.Latest(),
+					),
+					time.Lib(
+						time.Latest(),
+					),
+					transform.Lib(
+						transform.Latest(),
+					),
+				},
+			},
+		)
+		if err != nil {
+			cachedStaticEnvErr = err
+			return
+		}
+		cachedStaticEnv = extended
+	})
+	return cachedStaticEnv, cachedStaticEnvErr
+}
+
+// createIvpolEnv extends the cached base environment with the imageverify library.
+func (c *compilerImpl) createIvpolEnv(libsctx libs.Context, ictx imagedataloader.ImageContext, ivpol policiesv1beta1.ImageValidatingPolicyLike) (*environment.EnvSet, *compiler.VariablesProvider, error) {
+	staticBase, err := getOrCreateStaticBaseEnv(libsctx)
 	if err != nil {
 		return nil, nil, err
 	}
 
+	// Retrieve the stored-expressions env to create the variables provider.
+	env, err := staticBase.Env(environment.StoredExpressions)
+	if err != nil {
+		return nil, nil, err
+	}
 	variablesProvider := compiler.NewVariablesProvider(env.CELTypeProvider())
-	declProvider := apiservercel.NewDeclTypeProvider(compiler.NamespaceType, compiler.RequestType)
-	declOptions, err := declProvider.EnvOptions(variablesProvider)
-	if err != nil {
-		return nil, nil, err
-	}
 
-	baseOpts = append(baseOpts, declOptions...)
-
-	extendedBase, err := base.Extend(
-		environment.VersionedOptions{
-			IntroducedVersion: ivpolCompilerVersion,
-			EnvOptions:        baseOpts,
-		},
-		// libaries
+	// Extend the cached base with only the request-scoped imageverify library.
+	extended, err := staticBase.Extend(
 		environment.VersionedOptions{
 			IntroducedVersion: ivpolCompilerVersion,
 			EnvOptions: []cel.EnvOption{
-				globalcontext.Lib(
-					globalcontext.Context{ContextInterface: libsctx},
-					globalcontext.Latest(),
-				),
-				http.Lib(
-					http.Context{ContextInterface: http.NewHTTP(nil)},
-					http.Latest(),
-				),
-				image.Lib(
-					image.Latest(),
-				),
-				imagedata.Lib(
-					imagedata.Context{ContextInterface: libsctx},
-					imagedata.Latest(),
-				),
 				imageverify.Lib(
-					imageverify.Latest(), c.ictx, ivpol, c.lister,
-				),
-				resource.Lib(
-					resource.Context{ContextInterface: libsctx},
-					ivpol.GetNamespace(),
-					resource.Latest(),
-				),
-				user.Lib(
-					user.Latest(),
-				),
-				math.Lib(
-					math.Latest(),
-				),
-				hash.Lib(
-					hash.Latest(),
-				),
-				json.Lib(
-					&json.JsonImpl{},
-					json.Latest(),
-				),
-				yaml.Lib(
-					&yaml.YamlImpl{},
-					yaml.Latest(),
-				),
-				random.Lib(
-					random.Latest(),
-				),
-				time.Lib(
-					time.Latest(),
-				),
-				transform.Lib(
-					transform.Latest(),
+					imageverify.Latest(), ictx, ivpol, c.lister,
 				),
 			},
 		},
@@ -261,7 +298,7 @@ func (c *compilerImpl) createBaseIvpolEnv(libsctx libs.Context, ivpol policiesv1
 	if err != nil {
 		return nil, nil, err
 	}
-	return extendedBase, variablesProvider, nil
+	return extended, variablesProvider, nil
 }
 
 func getAttestations(att []v1beta1.Attestation) map[string]string {
