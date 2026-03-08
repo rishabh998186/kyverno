@@ -30,8 +30,10 @@ func (c *controller) handleVAPGeneration(ctx context.Context, polType string, po
 	var vapName string
 	if polType == "ClusterPolicy" {
 		vapName = "cpol-" + policy.GetName()
-	} else {
+	} else if polType == "ValidatingPolicy" {
 		vapName = "vpol-" + policy.GetName()
+	} else {
+		vapName = "nvpol-" + policy.GetNamespace() + "-" + policy.GetName()
 	}
 	vapBindingName := constructBindingName(vapName)
 	// get the ValidatingAdmissionPolicy and ValidatingAdmissionPolicyBinding if exists.
@@ -73,7 +75,7 @@ func (c *controller) handleVAPGeneration(ctx context.Context, polType string, po
 			genericExceptions = append(genericExceptions, engineapi.NewPolicyException(&exception))
 		}
 	} else {
-		pol := policy.AsValidatingPolicy()
+		pol := policy.AsValidatingPolicyLike()
 		wantVap := pol.GetSpec().GenerateValidatingAdmissionPolicyEnabled()
 		shouldDelete := !wantVap
 

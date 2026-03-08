@@ -20,13 +20,22 @@ func (c *controller) getClusterPolicy(name string) (*kyvernov1.ClusterPolicy, er
 	return cpolicy, nil
 }
 
-// getValidatngPolicy gets the Kyverno ValidatingPolicy
+// getValidatingPolicy gets the Kyverno ValidatingPolicy
 func (c *controller) getValidatingPolicy(name string) (*policiesv1beta1.ValidatingPolicy, error) {
 	vpol, err := c.vpolLister.Get(name)
 	if err != nil {
 		return nil, err
 	}
 	return vpol, nil
+}
+
+// getNamespacedValidatingPolicy gets the Kyverno NamespacedValidatingPolicy
+func (c *controller) getNamespacedValidatingPolicy(namespace, name string) (*policiesv1beta1.NamespacedValidatingPolicy, error) {
+	nvpol, err := c.nvpolLister.NamespacedValidatingPolicies(namespace).Get(name)
+	if err != nil {
+		return nil, err
+	}
+	return nvpol, nil
 }
 
 // getMutatingPolicy gets the Kyverno MutatingPolicy
@@ -36,6 +45,15 @@ func (c *controller) getMutatingPolicy(name string) (*policiesv1beta1.MutatingPo
 		return nil, err
 	}
 	return mpol, nil
+}
+
+// getNamespacedMutatingPolicy gets the Kyverno NamespacedMutatingPolicy
+func (c *controller) getNamespacedMutatingPolicy(namespace, name string) (*policiesv1beta1.NamespacedMutatingPolicy, error) {
+	nmpol, err := c.nmpolLister.NamespacedMutatingPolicies(namespace).Get(name)
+	if err != nil {
+		return nil, err
+	}
+	return nmpol, nil
 }
 
 // getValidatingAdmissionPolicy gets the Kubernetes ValidatingAdmissionPolicy

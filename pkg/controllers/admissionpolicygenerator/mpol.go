@@ -34,5 +34,9 @@ func (c *controller) enqueueMP(obj policiesv1beta1.MutatingPolicyLike) {
 		logger.Error(err, "failed to extract policy name")
 		return
 	}
-	c.queue.Add("MutatingPolicy/" + key)
+	prefix := "MutatingPolicy/"
+	if obj.GetNamespace() != "" {
+		prefix = "NamespacedMutatingPolicy/"
+	}
+	c.queue.Add(prefix + key)
 }

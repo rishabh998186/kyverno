@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/kyverno/api/api/policies.kyverno.io/v1beta1"
+	policiesv1beta1 "github.com/kyverno/api/api/policies.kyverno.io/v1beta1"
 	kyvernov1 "github.com/kyverno/kyverno/api/kyverno/v1"
 	kyvernov2 "github.com/kyverno/kyverno/api/kyverno/v2"
 	engineapi "github.com/kyverno/kyverno/pkg/engine/api"
@@ -104,6 +105,31 @@ func NewPolicyAppliedEvent(source Source, engineResponse engineapi.EngineRespons
 		Name:       policy.GetName(),
 		Namespace:  policy.GetNamespace(),
 		UID:        policy.GetUID(),
+	}
+	if regarding.APIVersion == "" {
+		if policy.IsNamespaced() {
+			regarding.APIVersion = policiesv1beta1.GroupVersion.String()
+		} else {
+			regarding.APIVersion = kyvernov1.GroupVersion.String()
+		}
+	}
+	if regarding.Kind == "" {
+		if policy.AsKyvernoPolicy() != nil {
+			regarding.Kind = "ClusterPolicy"
+			if policy.IsNamespaced() {
+				regarding.Kind = "Policy"
+			}
+		} else if policy.AsValidatingPolicyLike() != nil {
+			regarding.Kind = "ValidatingPolicy"
+			if policy.IsNamespaced() {
+				regarding.Kind = "NamespacedValidatingPolicy"
+			}
+		} else if policy.AsMutatingPolicyLike() != nil {
+			regarding.Kind = "MutatingPolicy"
+			if policy.IsNamespaced() {
+				regarding.Kind = "NamespacedMutatingPolicy"
+			}
+		}
 	}
 	related := engineResponse.GetResourceSpec()
 	return Info{
@@ -344,15 +370,44 @@ func NewCleanupPolicyEvent(policy kyvernov2.CleanupPolicyInterface, resource uns
 	}
 }
 
-func NewValidatingAdmissionPolicyEvent(policy engineapi.GenericPolicy, vapName, vapBindingName string) []Info {
+func newRegarding(policy engineapi.GenericPolicy) corev1.ObjectReference {
 	regarding := corev1.ObjectReference{
-		// TODO: iirc it's not safe to assume api version is set
 		APIVersion: policy.GetAPIVersion(),
 		Kind:       policy.GetKind(),
 		Name:       policy.GetName(),
 		Namespace:  policy.GetNamespace(),
 		UID:        policy.GetUID(),
 	}
+	if regarding.APIVersion == "" {
+		if policy.IsNamespaced() {
+			regarding.APIVersion = policiesv1beta1.GroupVersion.String()
+		} else {
+			regarding.APIVersion = kyvernov1.GroupVersion.String()
+		}
+	}
+	if regarding.Kind == "" {
+		if policy.AsKyvernoPolicy() != nil {
+			regarding.Kind = "ClusterPolicy"
+			if policy.IsNamespaced() {
+				regarding.Kind = "Policy"
+			}
+		} else if policy.AsValidatingPolicyLike() != nil {
+			regarding.Kind = "ValidatingPolicy"
+			if policy.IsNamespaced() {
+				regarding.Kind = "NamespacedValidatingPolicy"
+			}
+		} else if policy.AsMutatingPolicyLike() != nil {
+			regarding.Kind = "MutatingPolicy"
+			if policy.IsNamespaced() {
+				regarding.Kind = "NamespacedMutatingPolicy"
+			}
+		}
+	}
+	return regarding
+}
+
+func NewValidatingAdmissionPolicyEvent(policy engineapi.GenericPolicy, vapName, vapBindingName string) []Info {
+	regarding := newRegarding(policy)
 	vapEvent := Info{
 		Regarding: regarding,
 		Related: &corev1.ObjectReference{
@@ -378,6 +433,35 @@ func NewValidatingAdmissionPolicyEvent(policy engineapi.GenericPolicy, vapName, 
 		Message: fmt.Sprintf("successfully generated validating admission policy binding %s from policy %s", vapBindingName, policy.GetName()),
 	}
 	return []Info{vapEvent, vapBindingEvent}
+}
+
+func NewMutatingAdmissionPolicyEvent(policy engineapi.GenericPolicy, mapName, mapBindingName string) []Info {
+	regarding := newRegarding(policy)
+	mapEvent := Info{
+		Regarding: regarding,
+		Related: &corev1.ObjectReference{
+			APIVersion: "admissionregistration.k8s.io/v1alpha1",
+			Kind:       "MutatingAdmissionPolicy",
+			Name:       mapName,
+		},
+		Source:  GeneratePolicyController,
+		Action:  ResourceGenerated,
+		Reason:  PolicyApplied,
+		Message: fmt.Sprintf("successfully generated mutating admission policy %s from policy %s", mapName, policy.GetName()),
+	}
+	mapBindingEvent := Info{
+		Regarding: regarding,
+		Related: &corev1.ObjectReference{
+			APIVersion: "admissionregistration.k8s.io/v1alpha1",
+			Kind:       "MutatingAdmissionPolicyBinding",
+			Name:       mapBindingName,
+		},
+		Source:  GeneratePolicyController,
+		Action:  ResourceGenerated,
+		Reason:  PolicyApplied,
+		Message: fmt.Sprintf("successfully generated mutating admission policy binding %s from policy %s", mapBindingName, policy.GetName()),
+	}
+	return []Info{mapEvent, mapBindingEvent}
 }
 
 func NewFailedEvent(err error, policy, rule string, source Source, resource kyvernov1.ResourceSpec) Info {

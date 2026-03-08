@@ -121,6 +121,10 @@ func NewController(
 	if _, err := controllerutils.AddEventHandlersT(mpolInformer.Informer(), c.addMP, c.updateMP, c.deleteMP); err != nil {
 		logger.Error(err, "failed to register event handlers")
 	}
+	// Set up an event handler for when namespaced validating policies change
+	if _, err := controllerutils.AddEventHandlersT(nvpolInformer.Informer(), c.addVP, c.updateVP, c.deleteVP); err != nil {
+		logger.Error(err, "failed to register event handlers")
+	}
 
 	// Set up an event handler for when namespaced mutating policies change
 	if _, err := controllerutils.AddEventHandlersT(nmpolInformer.Informer(), c.addMP, c.updateMP, c.deleteMP); err != nil {
@@ -179,9 +183,15 @@ func (c *controller) Run(ctx context.Context, workers int) {
 func (c *controller) reconcile(ctx context.Context, logger logr.Logger, key, namespace, name string) error {
 	var policy engineapi.GenericPolicy
 
-	polType := strings.Split(key, "/")[0]
+	parts := strings.Split(key, "/")
+	polType := parts[0]
+	if len(parts) == 3 {
+		namespace = parts[1]
+		name = parts[2]
+	}
+
 	if polType == "ClusterPolicy" {
-		generateValidatingAdmissionPolicy := toggle.FromContext(context.TODO()).GenerateValidatingAdmissionPolicy()
+		generateValidatingAdmissionPolicy := toggle.FromContext(ctx).GenerateValidatingAdmissionPolicy()
 		if !generateValidatingAdmissionPolicy {
 			return nil
 		}
@@ -203,7 +213,7 @@ func (c *controller) reconcile(ctx context.Context, logger logr.Logger, key, nam
 			return err
 		}
 	} else if polType == "ValidatingPolicy" {
-		generateValidatingAdmissionPolicy := toggle.FromContext(context.TODO()).GenerateValidatingAdmissionPolicy()
+		generateValidatingAdmissionPolicy := toggle.FromContext(ctx).GenerateValidatingAdmissionPolicy()
 		if !generateValidatingAdmissionPolicy {
 			return nil
 		}
@@ -220,6 +230,24 @@ func (c *controller) reconcile(ctx context.Context, logger logr.Logger, key, nam
 		if err != nil {
 			return err
 		}
+	} else if polType == "NamespacedValidatingPolicy" {
+		generateValidatingAdmissionPolicy := toggle.FromContext(ctx).GenerateValidatingAdmissionPolicy()
+		if !generateValidatingAdmissionPolicy {
+			return nil
+		}
+		nvpol, err := c.getNamespacedValidatingPolicy(namespace, name)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil
+			}
+			logger.Error(err, "unable to get the policy from policy informer")
+			return err
+		}
+		policy = engineapi.NewNamespacedValidatingPolicy(nvpol)
+		err = c.handleVAPGeneration(ctx, polType, policy)
+		if err != nil {
+			return err
+		}
 	} else if polType == "MutatingPolicy" {
 		mpol, err := c.getMutatingPolicy(name)
 		if err != nil {
@@ -229,7 +257,7 @@ func (c *controller) reconcile(ctx context.Context, logger logr.Logger, key, nam
 			logger.Error(err, "unable to get the policy from policy informer")
 			return err
 		}
-		generateMutatingAdmissionPolicy := toggle.FromContext(context.TODO()).GenerateMutatingAdmissionPolicy()
+		generateMutatingAdmissionPolicy := toggle.FromContext(ctx).GenerateMutatingAdmissionPolicy()
 		if !generateMutatingAdmissionPolicy {
 			if !mpol.Spec.GenerateMutatingAdmissionPolicyEnabled() {
 				return nil
@@ -237,6 +265,26 @@ func (c *controller) reconcile(ctx context.Context, logger logr.Logger, key, nam
 			logger.Info("generating MutatingAdmissionPolicy explicitly enabled in policy", "policy", mpol.GetName())
 		}
 		err = c.handleMAPGeneration(ctx, mpol)
+		if err != nil {
+			return err
+		}
+	} else if polType == "NamespacedMutatingPolicy" {
+		nmpol, err := c.getNamespacedMutatingPolicy(namespace, name)
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil
+			}
+			logger.Error(err, "unable to get the policy from policy informer")
+			return err
+		}
+		generateMutatingAdmissionPolicy := toggle.FromContext(ctx).GenerateMutatingAdmissionPolicy()
+		if !generateMutatingAdmissionPolicy {
+			if !nmpol.Spec.GenerateMutatingAdmissionPolicyEnabled() {
+				return nil
+			}
+			logger.Info("generating MutatingAdmissionPolicy explicitly enabled in policy", "policy", nmpol.GetName())
+		}
+		err = c.handleNMAPGeneration(ctx, nmpol)
 		if err != nil {
 			return err
 		}

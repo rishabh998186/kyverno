@@ -96,9 +96,7 @@ func reconcile(ctx context.Context, logger logr.Logger, obj interface{}, r recon
 		k = string(key)
 	} else {
 		k = obj.(string)
-		if namespace, name, err := cache.SplitMetaNamespaceKey(k); err != nil {
-			return err
-		} else {
+		if namespace, name, err := cache.SplitMetaNamespaceKey(k); err == nil {
 			ns, n = namespace, name
 		}
 	}
