@@ -1,0 +1,57 @@
+name: Assign PR Milestone
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  assign-milestone:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assign Milestone
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const targetBranch = context.payload.pull_request.base.ref;
+            
+            const { data: milestones } = await github.rest.issues.listMilestones({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open"
+            });
+            
+            if (milestones.length === 0) {
+              console.log("No open milestones found. Skipping auto-assignment.");
+              return;
+            }
+
+            let targetMilestone;
+            
+            if (targetBranch.startsWith("release-")) {
+               const version = targetBranch.replace("release-", "");
+               targetMilestone = milestones.find(m => m.title === version) || 
+                                 milestones.find(m => m.title.startsWith(version));
+            } else if (targetBranch === "main") {
+               const milestonesWithDates = milestones.filter(m => m.due_on !== null);
+               
+               if (milestonesWithDates.length > 0) {
+                 milestonesWithDates.sort((a, b) => new Date(a.due_on) - new Date(b.due_on));
+                 targetMilestone = milestonesWithDates[0];
+               } else {
+                 console.log("No milestones have due dates set. Unable to determine the upcoming milestone for 'main'.");
+               }
+            }
+            
+            if (targetMilestone) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                milestone: targetMilestone.number
+              });
+              console.log(`Assigned milestone ${targetMilestone.title} to PR #${context.payload.pull_request.number}`);
+            } else {
+              console.log(`No matching open milestone found for branch ${targetBranch}`);
+            }
